@@ -1,6 +1,6 @@
 import hashlib
 from fastapi import FastAPI
-from yt_dlp.YoutubeDL import YoutubeDL
+from yt_dlp.YoutubeDL import YoutubeDL, DownloadError
 from urllib.parse import urlparse, parse_qs, ParseResult
 from googleapiclient.discovery import build
 from dotenv import load_dotenv
@@ -42,13 +42,17 @@ def extract_video_id(url_components):
 
 def fetch_youtube(url_components):
     video_id = extract_video_id(url_components)
+
+    if not video_id:
+        return {"Invalid": "No video id present"}
+
     request = yt.videos().list(
         part="status,snippet,contentDetails", id=video_id
     )
     response = request.execute()
 
     if not response["items"]:
-        return None
+        return {"Invalid": "Url doesn't point to a video"}
 
     response_item = response["items"][0]
     snippet = response_item["snippet"]
@@ -61,21 +65,42 @@ def fetch_youtube(url_components):
         "duration": iso8601_duration
     }
 
-def fetch_ytdlp(url):
+accepted_domains = [
+    "dailymotion.com",
+    "pony.tube",
+    "vimeo.com",
+    "bilibili.com",
+    "thishorsie.rocks",
+    "tiktok.com",
+    "twitter.com",
+    "x.com",
+    "odysee.com",
+    "newgrounds.com"
+]
+
+def fetch_ytdlp(url_components: ParseResult):
+    if url_components.netloc not in accepted_domains:
+        return {"Invalid": "Url not from an accepted domain"}
+
+    url = url_components.geturl()
     preprocess_changes = preprocess(url)
 
     if preprocess_changes and preprocess_changes.get("url"):
         url = preprocess_changes.pop("url")
 
     with YoutubeDL(ydl_opts) as ydl:
-        response = ydl.extract_info(url, download=False)
+        try:
+            response = ydl.extract_info(url, download=False)
+        except DownloadError:
+            return {"Invalid": "Url doesn't point to a video"}
+        
         if "entries" in response:
             response = response["entries"][0]
 
-    # preprocess_changes contains the response key that should be assigned a new value,
-    # and corrected, which can either be a different response key that has the value we
-    # originally wanted, None if the response key has an incorrect value with no substitutes,
-    # or a lambda function that modifies the value assigned to the respose key
+        # preprocess_changes contains the response key that should be assigned a new value,
+        # and corrected, which can either be a different response key that has the value we
+        # originally wanted, None if the response key has an incorrect value with no substitutes,
+        # or a lambda function that modifies the value assigned to the respose key
         if len(preprocess_changes):
             for response_key, corrected in preprocess_changes.items():
                 if corrected is None:
@@ -152,6 +177,6 @@ app = FastAPI()
 @app.post("/fetch")
 def update_item(urls: list[str]):
     urls: list[ParseResult] = [urlparse(url) for url in urls]
-    return [fetch_youtube(url) if url.netloc in youtube_domains else fetch_ytdlp(url.geturl()) for url in urls]
+    return [fetch_youtube(url_components) if url_components.netloc in youtube_domains else fetch_ytdlp(url_components) for url_components in urls]
 
 # "[\"https://www.newgrounds.com/portal/view/759280\", \"https://twitter.com/doubleWbrothers/status/1786396472105115712\", \"https://odysee.com/@DeletedBronyVideosArchive:d/blind-reaction-review-mlp-make-your-3:0\", \"https://www.tiktok.com/@kyukenn__/video/7338022224466562309?q=my%20little%20pony\&t=1714177735482\"]"
