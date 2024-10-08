@@ -1,0 +1,7 @@
+fastapi
+fastapi-cli
+uvicorn
+yt-dlp
+google-api-python-client
+hashlib
+python-dotenv
