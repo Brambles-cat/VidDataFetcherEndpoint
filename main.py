@@ -79,7 +79,12 @@ accepted_domains = [
 ]
 
 def fetch_ytdlp(url_components: ParseResult):
-    if url_components.netloc not in accepted_domains:
+    netloc = url_components.netloc
+    
+    if netloc.find(".") != netloc.rfind("."):
+        netloc = netloc.split(".", 1)[1]
+
+    if netloc not in accepted_domains:
         return {"Invalid": "Url not from an accepted domain"}
 
     url = url_components.geturl()
