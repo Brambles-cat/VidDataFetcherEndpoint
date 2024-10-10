@@ -1,3 +1,4 @@
+import uvicorn # For debugging purposes
 import hashlib
 from fastapi import FastAPI
 from yt_dlp.YoutubeDL import YoutubeDL, DownloadError
@@ -5,6 +6,8 @@ from urllib.parse import urlparse, parse_qs, ParseResult
 from googleapiclient.discovery import build
 from dotenv import load_dotenv
 import re, os
+from datetime import datetime
+import pytz
 
 load_dotenv()
 api_key = os.getenv("apikey")
@@ -40,6 +43,33 @@ def extract_video_id(url_components):
 
     return video_id
 
+def convert_iso8601_duration_to_seconds(iso8601_duration: str) -> int:
+    """Given an ISO 8601 duration string, return the length of that duration in
+    seconds.
+
+    Note: Apparently the isodate package can perform this conversion if needed.
+    """
+    if iso8601_duration.startswith("PT"):
+        iso8601_duration = iso8601_duration[2:]
+
+    total_seconds, hours, minutes, seconds = 0, 0, 0, 0
+
+    if "H" in iso8601_duration:
+        hours_part, iso8601_duration = iso8601_duration.split("H")
+        hours = int(hours_part)
+
+    if "M" in iso8601_duration:
+        minutes_part, iso8601_duration = iso8601_duration.split("M")
+        minutes = int(minutes_part)
+
+    if "S" in iso8601_duration:
+        seconds_part = iso8601_duration.replace("S", "")
+        seconds = int(seconds_part)
+
+    total_seconds = hours * 3600 + minutes * 60 + seconds
+
+    return total_seconds
+
 def fetch_youtube(url_components):
     video_id = extract_video_id(url_components)
 
@@ -61,8 +91,8 @@ def fetch_youtube(url_components):
     return {
         "title": snippet["title"],
         "uploader": snippet["channelTitle"],
-        "upload_date": snippet["publishedAt"],
-        "duration": iso8601_duration
+        "upload_date": int(datetime.fromisoformat(snippet["publishedAt"]).timestamp()),
+        "duration": convert_iso8601_duration_to_seconds(iso8601_duration)
     }
 
 accepted_domains = [
@@ -88,7 +118,7 @@ def fetch_ytdlp(url_components: ParseResult):
         return {"Invalid": "Url not from an accepted domain"}
 
     url = url_components.geturl()
-    preprocess_changes = preprocess(url)
+    preprocess_changes = preprocess(url_components)
 
     if preprocess_changes and preprocess_changes.get("url"):
         url = preprocess_changes.pop("url")
@@ -114,11 +144,14 @@ def fetch_ytdlp(url_components: ParseResult):
                     response[response_key] = response.get(corrected)
                 else:
                     response[response_key] = corrected(response)
+        
+        upload_date = datetime.strptime(response.get("upload_date"), "%Y%m%d")
+        upload_date = pytz.utc.localize(upload_date)
 
         return {
             "title": response.get("title"),
             "uploader": response.get("channel"),
-            "upload_date": response.get("upload_date"),
+            "upload_date": upload_date.timestamp(),
             "duration": response.get("duration"),
         }
 
@@ -126,9 +159,10 @@ def fetch_ytdlp(url_components: ParseResult):
 # be handled here before they can be properly processed
 # If yt-dlp gets any updates that resolve any of these issues
 # then the respective case should be updated accordingly
-def preprocess(url: str) -> dict:
-    url_components = urlparse(url)
-    site = url_components.netloc.split(".")[0]
+def preprocess(url_components: ParseResult) -> dict:
+    site = url_components.netloc.split(".")
+    site = site[0] if len(site) == 2 else site[1]
+    
     changes = {}
 
     match site:
@@ -183,5 +217,9 @@ app = FastAPI()
 def update_item(urls: list[str]):
     urls: list[ParseResult] = [urlparse(url) for url in urls]
     return [fetch_youtube(url_components) if url_components.netloc in youtube_domains else fetch_ytdlp(url_components) for url_components in urls]
+
+
+if __name__ == "__main__":
+    uvicorn.run(app)
 
 # "[\"https://www.newgrounds.com/portal/view/759280\", \"https://twitter.com/doubleWbrothers/status/1786396472105115712\", \"https://odysee.com/@DeletedBronyVideosArchive:d/blind-reaction-review-mlp-make-your-3:0\", \"https://www.tiktok.com/@kyukenn__/video/7338022224466562309?q=my%20little%20pony\&t=1714177735482\"]"
