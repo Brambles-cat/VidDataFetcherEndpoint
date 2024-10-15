@@ -19,6 +19,8 @@ ydl_opts = {
 
 yt = build("youtube", "v3", developerKey=api_key)
 
+yt_cache = {}
+
 def extract_video_id(url_components):
     """Given a YouTube video URL, extract the video id from it, or None if
     no video id can be extracted."""
@@ -75,6 +77,11 @@ def fetch_youtube(url_components):
 
     if not video_id:
         return {"Invalid": "No video id present"}
+    
+    video_data = yt_cache.get(video_id)
+
+    if video_data:
+        return video_data
 
     request = yt.videos().list(
         part="status,snippet,contentDetails", id=video_id
@@ -88,12 +95,15 @@ def fetch_youtube(url_components):
     snippet = response_item["snippet"]
     iso8601_duration = response_item["contentDetails"]["duration"]
 
-    return {
+    video_data = {
         "title": snippet["title"],
         "uploader": snippet["channelTitle"],
         "upload_date": int(datetime.fromisoformat(snippet["publishedAt"]).timestamp()),
         "duration": convert_iso8601_duration_to_seconds(iso8601_duration)
     }
+
+    yt_cache[video_id] = video_data
+    return video_data
 
 accepted_domains = [
     "dailymotion.com",
@@ -108,6 +118,8 @@ accepted_domains = [
     "newgrounds.com"
 ]
 
+ytdlp_cache = {domain: {} for domain in accepted_domains}
+
 def fetch_ytdlp(url_components: ParseResult):
     netloc = url_components.netloc
     
@@ -116,6 +128,12 @@ def fetch_ytdlp(url_components: ParseResult):
 
     if netloc not in accepted_domains:
         return {"Invalid": "Url not from an accepted domain"}
+    
+    video_id = url_components.path.split("?")[0].rstrip("/").split("/")[-1]
+    video_data = ytdlp_cache[netloc].get(video_id)
+
+    if video_data:
+        return video_data
 
     url = url_components.geturl()
     preprocess_changes = preprocess(url_components)
@@ -148,12 +166,15 @@ def fetch_ytdlp(url_components: ParseResult):
         upload_date = datetime.strptime(response.get("upload_date"), "%Y%m%d")
         upload_date = pytz.utc.localize(upload_date)
 
-        return {
+        video_data = {
             "title": response.get("title"),
             "uploader": response.get("channel"),
             "upload_date": upload_date.timestamp(),
             "duration": response.get("duration"),
         }
+
+        ytdlp_cache[response["webpage_url_domain"]][response["display_id"]] = video_data
+        return video_data
 
 # Some urls might have specific issues that should
 # be handled here before they can be properly processed
@@ -167,9 +188,9 @@ def preprocess(url_components: ParseResult) -> dict:
 
     match site:
         case "x":
-            url = "https://twitter.com" + url_components.path
-            changes = preprocess(url)
-            changes["url"] = url
+            new_url = "https://twitter.com" + url_components.path
+            changes = preprocess(urlparse(new_url))
+            changes["url"] = new_url
 
         case "twitter":
             changes["channel"] = "uploader_id"
@@ -180,6 +201,7 @@ def preprocess(url_components: ParseResult) -> dict:
             # This type of url means that the post has more than one video
             # and ytdlp will only successfully retrieve the duration if
             # the video is at index one
+            url = url_components.geturl()
             if (
                 url[0 : url.rfind("/")].endswith("/video")
                 and int(url[url.rfind("/") + 1 :]) != 1
@@ -222,4 +244,4 @@ def update_item(urls: list[str]):
 if __name__ == "__main__":
     uvicorn.run(app)
 
-# "[\"https://www.newgrounds.com/portal/view/759280\", \"https://twitter.com/doubleWbrothers/status/1786396472105115712\", \"https://odysee.com/@DeletedBronyVideosArchive:d/blind-reaction-review-mlp-make-your-3:0\", \"https://www.tiktok.com/@kyukenn__/video/7338022224466562309?q=my%20little%20pony\&t=1714177735482\"]"
+# "[\"https://www.newgrounds.com/portal/view/759280\", \"https://twitter.com/doubleWbrothers/status/1786396472105115712\", \"https://odysee.com/@DeletedBronyVideosArchive:d/blind-reaction-review-mlp-make-your-3:0\", \"https://www.tiktok.com/@kyukenn__/video/7338022224466562309?q=my%20little%20pony\"]"
